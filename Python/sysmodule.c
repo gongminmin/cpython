@@ -1094,6 +1094,7 @@ sys_getwindowsversion(PyObject *self)
     realMinor = ver.dwMinorVersion;
     realBuild = ver.dwBuildNumber;
 
+#ifndef MS_WINDOWS_STORE
     // GetVersion will lie if we are running in a compatibility mode.
     // We need to read the version info from a system file resource
     // to accurately identify the OS version. If we fail for any reason,
@@ -1113,6 +1114,7 @@ sys_getwindowsversion(PyObject *self)
         }
         PyMem_RawFree(verblock);
     }
+#endif
     PyStructSequence_SET_ITEM(version, pos++, Py_BuildValue("(kkk)",
         realMajor,
         realMinor,
