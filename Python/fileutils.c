@@ -54,7 +54,7 @@ get_surrogateescape(_Py_error_handler errors, int *surrogateescape)
 PyObject *
 _Py_device_encoding(int fd)
 {
-#if defined(MS_WINDOWS)
+#if defined(MS_WINDOWS) && !defined(MS_WINDOWS_STORE)
     UINT cp;
 #endif
     int valid;
@@ -65,6 +65,9 @@ _Py_device_encoding(int fd)
         Py_RETURN_NONE;
 
 #if defined(MS_WINDOWS)
+#if defined(MS_WINDOWS_STORE)
+    return PyUnicode_FromString("UTF-8");
+#else
     if (fd == 0)
         cp = GetConsoleCP();
     else if (fd == 1 || fd == 2)
@@ -75,6 +78,7 @@ _Py_device_encoding(int fd)
        has no console */
     if (cp != 0)
         return PyUnicode_FromFormat("cp%u", (unsigned int)cp);
+#endif
 #elif defined(CODESET)
     {
         char *codeset = nl_langinfo(CODESET);
@@ -864,6 +868,31 @@ attributes_to_mode(DWORD attr)
     return m;
 }
 
+#ifdef MS_WINDOWS_STORE
+void
+_Py_attribute_data_to_stat(FILE_BASIC_INFO *fbi, FILE_STANDARD_INFO *fsi,
+                           ULONG reparse_tag, struct _Py_stat_struct *result)
+{
+    memset(result, 0, sizeof(*result));
+    result->st_mode = attributes_to_mode(fbi->FileAttributes);
+    result->st_size = fsi->EndOfFile.QuadPart;
+    FILE_TIME_to_time_t_nsec(&fbi->CreationTime, &result->st_ctime, &result->st_ctime_nsec);
+    FILE_TIME_to_time_t_nsec(&fbi->LastWriteTime, &result->st_mtime, &result->st_mtime_nsec);
+    FILE_TIME_to_time_t_nsec(&fbi->LastAccessTime, &result->st_atime, &result->st_atime_nsec);
+    result->st_nlink = fsi->NumberOfLinks;
+    /* XXX
+    result->st_ino = (((uint64_t)info->nFileIndexHigh) << 32) + info->nFileIndexLow;
+    */
+    result->st_ino = -1;
+    if (reparse_tag == IO_REPARSE_TAG_SYMLINK) {
+        /* first clear the S_IFMT bits */
+        result->st_mode ^= (result->st_mode & S_IFMT);
+        /* now set the bits that make this a symlink */
+        result->st_mode |= S_IFLNK;
+    }
+    result->st_file_attributes = fbi->FileAttributes;
+}
+#else
 void
 _Py_attribute_data_to_stat(BY_HANDLE_FILE_INFORMATION *info, ULONG reparse_tag,
                            struct _Py_stat_struct *result)
@@ -887,6 +916,7 @@ _Py_attribute_data_to_stat(BY_HANDLE_FILE_INFORMATION *info, ULONG reparse_tag,
     result->st_file_attributes = info->dwFileAttributes;
 }
 #endif
+#endif
 
 /* Return information about a file.
 
@@ -904,7 +934,12 @@ int
 _Py_fstat_noraise(int fd, struct _Py_stat_struct *status)
 {
 #ifdef MS_WINDOWS
+#ifdef MS_WINDOWS_STORE
+    FILE_BASIC_INFO fbi;
+    FILE_STANDARD_INFO fsi;
+#else
     BY_HANDLE_FILE_INFORMATION info;
+#endif
     HANDLE h;
     int type;
 
@@ -938,6 +973,18 @@ _Py_fstat_noraise(int fd, struct _Py_stat_struct *status)
         return 0;
     }
 
+#ifdef MS_WINDOWS_STORE
+    if (!GetFileInformationByHandleEx(h, FileBasicInfo, &fbi, sizeof(fbi))) {
+        return -1;
+    }
+
+    if (!GetFileInformationByHandleEx(h, FileStandardInfo, &fsi, sizeof(fsi))) {
+        return -1;
+    }
+
+    _Py_attribute_data_to_stat(&fbi, &fsi, 0, status);
+    status->st_ino = 0;
+#else
     if (!GetFileInformationByHandle(h, &info)) {
         /* The Win32 error is already set, but we also set errno for
            callers who expect it */
@@ -948,6 +995,8 @@ _Py_fstat_noraise(int fd, struct _Py_stat_struct *status)
     _Py_attribute_data_to_stat(&info, 0, status);
     /* specific to fstat() */
     status->st_ino = (((uint64_t)info.nFileIndexHigh) << 32) + info.nFileIndexLow;
+#endif
+
     return 0;
 #else
     return fstat(fd, status);
@@ -1040,6 +1089,9 @@ static int
 get_inheritable(int fd, int raise)
 {
 #ifdef MS_WINDOWS
+#ifdef MS_WINDOWS_STORE
+    return 0;
+#else
     HANDLE handle;
     DWORD flags;
 
@@ -1059,6 +1111,7 @@ get_inheritable(int fd, int raise)
     }
 
     return (flags & HANDLE_FLAG_INHERIT);
+#endif
 #else
     int flags;
 
@@ -1087,8 +1140,10 @@ static int
 set_inheritable(int fd, int inheritable, int raise, int *atomic_flag_works)
 {
 #ifdef MS_WINDOWS
+#ifndef MS_WINDOWS_STORE
     HANDLE handle;
     DWORD flags;
+#endif
 #else
 #if defined(HAVE_SYS_IOCTL_H) && defined(FIOCLEX) && defined(FIONCLEX)
     static int ioctl_works = -1;
@@ -1116,6 +1171,12 @@ set_inheritable(int fd, int inheritable, int raise, int *atomic_flag_works)
     }
 
 #ifdef MS_WINDOWS
+#ifdef MS_WINDOWS_STORE
+    if (!inheritable)
+        return 0;
+    PyErr_SetString(PyExc_NotImplementedError, "set_inheritable is not implemented on UWP");
+    return -1;
+#else
     _Py_BEGIN_SUPPRESS_IPH
     handle = (HANDLE)_get_osfhandle(fd);
     _Py_END_SUPPRESS_IPH
@@ -1135,6 +1196,7 @@ set_inheritable(int fd, int inheritable, int raise, int *atomic_flag_works)
         return -1;
     }
     return 0;
+#endif
 
 #else
 

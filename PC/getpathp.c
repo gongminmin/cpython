@@ -236,15 +236,22 @@ ismodule(wchar_t *filename, int update_filename)
    stuff as fits will be appended.
 */
 
+#ifndef MS_WINDOWS_STORE
 static int _PathCchCombineEx_Initialized = 0;
 typedef HRESULT(__stdcall *PPathCchCombineEx) (PWSTR pszPathOut, size_t cchPathOut,
                                                PCWSTR pszPathIn, PCWSTR pszMore,
                                                unsigned long dwFlags);
 static PPathCchCombineEx _PathCchCombineEx;
+#endif
 
 static void
 join(wchar_t *buffer, const wchar_t *stuff)
 {
+#ifdef MS_WINDOWS_STORE
+    if (FAILED(PathCchCombineEx(buffer, MAXPATHLEN+1, buffer, stuff, 0))) {
+        Py_FatalError("buffer overflow in getpathp.c's join()");
+    }
+#else
     if (_PathCchCombineEx_Initialized == 0) {
         HMODULE pathapi = LoadLibraryW(L"api-ms-win-core-path-l1-1-0.dll");
         if (pathapi) {
@@ -265,12 +272,15 @@ join(wchar_t *buffer, const wchar_t *stuff)
             Py_FatalError("buffer overflow in getpathp.c's join()");
         }
     }
+#endif
 }
 
+#ifdef MS_WINDOWS_STORE
 static int _PathCchCanonicalizeEx_Initialized = 0;
 typedef HRESULT(__stdcall *PPathCchCanonicalizeEx) (PWSTR pszPathOut, size_t cchPathOut,
     PCWSTR pszPathIn, unsigned long dwFlags);
 static PPathCchCanonicalizeEx _PathCchCanonicalizeEx;
+#endif
 
 static PyStatus canonicalize(wchar_t *buffer, const wchar_t *path)
 {
@@ -278,6 +288,11 @@ static PyStatus canonicalize(wchar_t *buffer, const wchar_t *path)
         return _PyStatus_NO_MEMORY();
     }
 
+#ifdef MS_WINDOWS_STORE
+    if (FAILED(PathCchCanonicalizeEx(buffer, MAXPATHLEN + 1, path, 0))) {
+        Py_FatalError("buffer overflow in getpathp.c's canonicalize()");
+    }
+#else
     if (_PathCchCanonicalizeEx_Initialized == 0) {
         HMODULE pathapi = LoadLibraryW(L"api-ms-win-core-path-l1-1-0.dll");
         if (pathapi) {
@@ -299,6 +314,7 @@ static PyStatus canonicalize(wchar_t *buffer, const wchar_t *path)
             return _PyStatus_ERR("buffer overflow in getpathp.c's canonicalize()");
         }
     }
+#endif
     return _PyStatus_OK();
 }
 
@@ -1058,6 +1074,9 @@ static HANDLE hPython3;
 int
 _Py_CheckPython3(void)
 {
+#ifdef MS_WINDOWS_STORE
+    return 0;
+#else
     wchar_t py3path[MAXPATHLEN+1];
     wchar_t *s;
     if (python3_checked) {
@@ -1083,4 +1102,5 @@ _Py_CheckPython3(void)
     wcscat(py3path, L"\\DLLs\\python3.dll");
     hPython3 = LoadLibraryExW(py3path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
     return hPython3 != NULL;
+#endif
 }

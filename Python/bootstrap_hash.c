@@ -32,11 +32,14 @@ static int _Py_HashSecret_Initialized = 0;
 #endif
 
 #ifdef MS_WINDOWS
+#ifndef MS_WINDOWS_STORE
 static HCRYPTPROV hCryptProv = 0;
+#endif
 
 static int
 win32_urandom_init(int raise)
 {
+#ifndef MS_WINDOWS_STORE
     /* Acquire context */
     if (!CryptAcquireContext(&hCryptProv, NULL, NULL,
                              PROV_RSA_FULL, CRYPT_VERIFYCONTEXT))
@@ -48,6 +51,7 @@ error:
     if (raise) {
         PyErr_SetFromWindowsErr(0);
     }
+#endif
     return -1;
 }
 
@@ -56,6 +60,9 @@ error:
 static int
 win32_urandom(unsigned char *buffer, Py_ssize_t size, int raise)
 {
+#ifdef MS_WINDOWS_STORE
+    return -1;
+#else
     if (hCryptProv == 0)
     {
         if (win32_urandom_init(raise) == -1) {
@@ -78,6 +85,7 @@ win32_urandom(unsigned char *buffer, Py_ssize_t size, int raise)
         size -= chunk;
     }
     return 0;
+#endif
 }
 
 #else /* !MS_WINDOWS */
@@ -578,10 +586,12 @@ _Py_HashRandomization_Init(const PyConfig *config)
            _PyRandom_Init() must not block Python initialization: call
            pyurandom() is non-blocking mode (blocking=0): see the PEP 524. */
         res = pyurandom(secret, secret_size, 0, 0);
+#ifndef MS_WINDOWS_STORE
         if (res < 0) {
             return _PyStatus_ERR("failed to get random numbers "
                                 "to initialize Python");
         }
+#endif
     }
     return _PyStatus_OK();
 }
@@ -591,10 +601,12 @@ void
 _Py_HashRandomization_Fini(void)
 {
 #ifdef MS_WINDOWS
+#ifndef MS_WINDOWS_STORE
     if (hCryptProv) {
         CryptReleaseContext(hCryptProv, 0);
         hCryptProv = 0;
     }
+#endif
 #else
     dev_urandom_close();
 #endif
